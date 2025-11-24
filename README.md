@@ -1,236 +1,166 @@
-# A generic non-invasive neuromotor interface for human-computer interaction
+# Hand Gesture Recognition Model (HGAG Dataset)
 
-[ [`Paper`](https://www.nature.com/articles/s41586-025-09255-w) ] [ [`BibTeX`](#citation) ]
+A real-time hand gesture classifier trained on the HGAG (Hand Gesture Accelerometer Gyroscope) dataset using Edge Impulse, optimized for deployment on **Seeed XIAO nRF52840** with **ICM20948** IMU sensor. There are several issues with how this prototype classifier will be used: 
+1) there is no "neutral" class, meaning resting is also improperly classified such that proper inferencing will have to occur "manually" 
+2) low accuracy for class differentiation between wrist extension and flexion (inherent to the uncertainty of the IMU sensor to differentiate muscle group ) 
 
-[![Neuromotor CI](https://github.com/facebookresearch/generic-neuromotor-interface/actions/workflows/main.yml/badge.svg)](https://github.com/facebookresearch/generic-neuromotor-interface/actions/workflows/main.yml)
+---
 
-This repo is for exploring surface electromyography (sEMG) data and training models associated with the paper ["A generic non-invasive neuromotor interface for human-computer interaction"](https://www.nature.com/articles/s41586-025-09255-w).
+## Model Performance
 
-The dataset contains sEMG recordings from 100 participants in each of the three tasks described in the paper: `discrete_gestures`, `handwriting`, and `wrist`. This repo contains implementations of the models in the paper as well as code for training and evaluating the models.
+- **Test Accuracy:** 92.11%
+- **Training Accuracy:** 96-99%
+- **Inference Time:** ~1ms
+- **Memory Usage:** ~27.9K flash, ~1.9K Peak RAM
+- **ROC-AUC:** 0.98-0.99
 
-![Figure 1 from the paper](images/figure_1.png)
+---
 
-## Setup
+## Supported Gestures (6 Classes)
 
-First, clone this repository and navigate to the root directory.
+| Gesture | Description | Test Accuracy |
+|---------|-------------|---------------|
+| **Clapping** | Hands clapping together | 98.2% |
+| **Index Thumb Tap** | Tapping index finger to thumb | 100% |
+| **Horizontal Wrist Extension** | Extending wrist horizontally | 98.2% |
+| **Fist Making** | Closing hand into fist | 79.8% |
+| **Wrist Extension** | Extending wrist upward | 76% |
+| **Wrist Flexion** | Flexing wrist downward | 73.1% |
 
-```bash
-git clone https://github.com/facebookresearch/generic-neuromotor-interface.git
-cd generic-neuromotor-interface
+---
+
+## Hardware Requirements
+
+- **Microcontroller:** Seeed XIAO nRF52840 (256KB RAM, 1MB Flash)
+- **IMU Sensor:** ICM20948 (9-DOF: 3-axis accel, gyro, mag)
+- **Connection:** I2C communication
+- **Power:** USB-C or battery (3.3V-5V)
+
+---
+
+## Dataset Information
+
+**Source:** HGAG-DATA (Hand Gesture Accelerometer Gyroscope)  
+**Origin:** Mendeley Data  
+**Total Samples:** 23,650 gesture recordings  
+**Participants:** 43 individuals  
+**Sampling Rate:** 200 Hz  
+**Sensor Data:** 6-axis (3-axis accelerometer + 3-axis gyroscope)
+
+### Data Characteristics
+- **Window Size:** 2000ms (2 seconds per gesture)
+- **Window Overlap:** 100ms sliding window
+- **Total Features:** 1200 (200 samples × 6 axes)
+- **Original Gestures:** 11 (reduced to 6 for optimal accuracy)
+
+---
+
+## Model Architecture
+
+### Processing Pipeline
+1. **Wavelet Transform:** rbio3.1, level 1, scale 0.0098, cutoff 94Hz
+2. **Neural Network:** 4-layer dense architecture with BatchNorm + Dropout
+
+### Network Structure
+```
+Input (1200 features)
+    ↓
+Dense(56, ReLU) → BatchNorm → Dropout(0.35)
+    ↓
+Dense(40, ReLU) → BatchNorm → Dropout(0.30)
+    ↓
+Dense(28, ReLU) → Dropout(0.25)
+    ↓
+Dense(16, ReLU) → Dropout(0.20)
+    ↓
+Output(6, Softmax)
 ```
 
-Now setup the conda environment and install the local package.
+### Training Configuration
+- **Epochs:** 200
+- **Learning Rate:** 0.0006
+- **Batch Size:** 20
+- **Optimizer:** Adam with gradient clipping (clipnorm=1.0)
+- **Callbacks:** EarlyStopping (patience=25), ReduceLROnPlateau (patience=12)
 
-```bash
-# Setup and activate the environment
-conda env create -f environment.yml
-conda activate neuromotor
+---
 
-# Install this repository as a package
-pip install -e .
+## Deployment
+
+### Edge Impulse Configuration
+- **Optimization:** EON Compiler enabled
+- **Quantization:** int8 (reduces model size by ~4x)
+- **Target Device:** Seeed XIAO nRF52840
+
+### Sensor Configuration
+- **Accelerometer Range:** ±16G
+- **Gyroscope Range:** ±2000 DPS
+- **Sampling Rate:** 200 Hz (5ms intervals)
+- **Data Units:** 
+  - Accel: m/s²
+  - Gyro: rad/s (not deg/s)
+
+### Axis Order (CRITICAL)
+```
+accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z
 ```
 
-## Download the data and models
+---
 
-To download the full dataset to `~/emg_data` for a given task, run:
-
-```bash
-python -m generic_neuromotor_interface.scripts.download_data \
-    --task $TASK_NAME \
-    --output-dir ~/emg_data
-```
-
-where `$TASK_NAME`  is one of {`discrete_gestures, handwriting, wrist`}.
-
-Alternatively, you can download and extract a smaller version of the dataset with only 3 participants per task to quickly get started:
-
-```bash
-# NOTE: `--small-subset` downloads only 3 users per task
-python -m generic_neuromotor_interface.scripts.download_data \
-    --task $TASK_NAME \
-    --output-dir ~/emg_data \
-    --small-subset
-```
-
-To download pretrained checkpoints for a task, run:
-
-```bash
-python -m generic_neuromotor_interface.scripts.download_models \
-    --task $TASK_NAME \
-    --output-dir ~/emg_models
-```
-
-The extracted output contains a `.ckpt` file and a `model_config.yaml` file.
-
-## Explore the data in a notebook
-
-Use the `explore_data.ipynb` notebook to see how data can be loaded and plotted:
-
-```bash
-jupyter lab notebooks/explore_data.ipynb
-```
-
-## Train a model
-
-Train a model via:
-
-```bash
-python -m generic_neuromotor_interface.train \
-    --config-name=$TASK_NAME
-```
-
-Note that this requires downloading the `full_data` dataset as described earlier.
-
-You can also launch a small test run (1 epoch on the `small_subset` dataset) via:
-
-```bash
-python -m generic_neuromotor_interface.train \
-    --config-name=$TASK_NAME \
-    trainer.max_epochs=1 \
-    trainer.accelerator=cpu \
-    data_module/data_split=${TASK_NAME}_mini_split
-```
-
-After training, the model checkpoint will be available at `./logs/<DATE>/<TIME>/lightning_logs/<VERSION>/checkpoints/`, and the model config will be available at `./logs/<DATE>/<TIME>/hydra_configs/config.yaml`.
-
-## Evaluate a model
-
-Model evaluation on the validation and test sets is automatically performed in the training script after training is complete.
-
-We also provide interactive notebooks to run model evaluation on any given trained model. Please see the evaluation notebooks:
-
-```bash
-jupyter lab notebooks
-
-# see:
-# notebooks/discrete_gestures_eval.ipynb
-# notebooks/handwriting_eval.ipynb
-# notebooks/wrist_eval.ipynb
-```
-These notebooks also provide some visualizations of the model outputs.
-
-## Dataset details
-
-<div align="center">
-    <table>
-      <thead>
-        <tr>
-          <th rowspan="2">Quantity</th>
-          <th colspan="3">Discrete Gestures</th>
-          <th colspan="3">Handwriting</th>
-          <th colspan="3">Wrist</th>
-        </tr>
-        <tr>
-          <th>Train</th>
-          <th>Val</th>
-          <th>Test</th>
-          <th>Train</th>
-          <th>Val</th>
-          <th>Test</th>
-          <th>Train</th>
-          <th>Val</th>
-          <th>Test</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Number of Users</td>
-          <td>80</td>
-          <td>10</td>
-          <td>10</td>
-          <td>80</td>
-          <td>10</td>
-          <td>10</td>
-          <td>80</td>
-          <td>10</td>
-          <td>10</td>
-        </tr>
-        <tr>
-          <td>Number of Datasets</td>
-          <td>80</td>
-          <td>10</td>
-          <td>10</td>
-          <td>618</td>
-          <td>135</td>
-          <td>54</td>
-          <td>142</td>
-          <td>20</td>
-          <td>20</td>
-        </tr>
-        <tr>
-          <td>Hours</td>
-          <td>51.4</td>
-          <td>6.2</td>
-          <td>6.4</td>
-          <td>98.8</td>
-          <td>31.5</td>
-          <td>10.4</td>
-          <td>60.2</td>
-          <td>8.7</td>
-          <td>8.3</td>
-        </tr>
-        <tr>
-          <td>Datasets Per User</td>
-          <td>1.0</td>
-          <td>1.0</td>
-          <td>1.0</td>
-          <td>7.7</td>
-          <td>13.5</td>
-          <td>5.4</td>
-          <td>1.8</td>
-          <td>2.0</td>
-          <td>2.0</td>
-        </tr>
-        <tr>
-          <td>Hours Per User</td>
-          <td>0.6</td>
-          <td>0.6</td>
-          <td>0.6</td>
-          <td>1.2</td>
-          <td>3.2</td>
-          <td>1.0</td>
-          <td>0.8</td>
-          <td>0.9</td>
-          <td>0.8</td>
-        </tr>
-      </tbody>
-    </table>
-</div>
-
-We are releasing data from 100 data collection participants for each task: 80 train, 10 validation, and 10 test participants. Train participants correspond to those from the 80 participant data point in Figures 2e-g (except for Handwriting, where we randomly selected 80 participants from the 100 participant data point). The 10 validation and train participants were randomly selected from the full set of validation and test participants.
-
-Evaluation metrics may deviate slightly from the published results due to subsampling of the test participants (as there is considerable variability across participants) and variability across model seeds.
-
-Each recording is stored in an `.hdf5` file, and there can be multiple recordings per participant. There is also a `.csv` file for each task (`${TASK_NAME}_corpus.csv`) documenting the recordings included for each participant, start and end times for each relevant "stage" from the experimental protocol (see below), and their assignment to the train / val / test splits. This `.csv` file is downloaded alongside the data by the download script described above.
-
-sEMG is recorded at 2 kHz and is high pass filtered at 40 Hz. Timestamps are expressed in seconds. A `stages` dataframe is included in each dataset that encodes the time of each stage of the experiment (see `explore_data.ipynb` for more details). Specifics for each task are as follows:
-
-### Discrete gestures
-
-Datasets include the `name` of each gesture and the `time` at which it occurred. Stage names include the types of gestures performed in each stage, as well as the posture (e.g. `static_arm_in_front`, `static_arm_in_lap`, ...)
-
-### Handwriting
-
-Handwriting datasets include the `start` and `end` time of each prompt. `start` is the time the prompt appears, and `end` is the time at which participants marked as having finished writing the prompt. Stage names describe the types of prompts in each stage (e.g. `words_with_backspace`, `three_digit_numbers`, ...).
-
-### Wrist
-
-Wrist angle datasets also include wrist angle measurements, which are upsampled to match the 2 kHz EMG sampling rate. Stage names include information about the type of task and movement in each stage (e.g. `cursor_to_target_task_horizontal_low_gain_screen_4`, `smooth_pursuit_task_high_gain_1`, ...).
-
-## License
-
-The dataset and the code are CC-BY-NC-4.0 licensed, as found in the LICENSE file.
-
-## Citation
+## Performance by Gesture
 
 ```
-@article{generic_neuromotor_interface_2025,
-  title = {A generic non-invasive neuromotor interface for human-computer interaction},
-  author = {Kaifosh, Patrick and Reardon, Thomas R. and CTRL-labs at Reality Labs},
-  journal = {Nature},
-  year = {2025},
-  doi = {10.1038/s41586-025-09255-w},
-  issn = {1476-4687},
-  url = {https://www.nature.com/articles/s41586-025-09255-w},
-}
+Gesture                      | Precision | Recall | F1-Score
+-----------------------------|-----------|--------|----------
+Clapping                     |   0.95    |  0.96  |   0.95
+Index Thumb Tap              |   1.00    |  1.00  |   1.00
+Horizontal Wrist Extension   |   0.97    |  0.98  |   0.97
+Fist Making                  |   0.75    |  0.80  |   0.75
+Wrist Extension              |   0.80    |  0.76  |   0.80
+Wrist Flexion                |   0.79    |  0.73  |   0.79
 ```
+
+---
+
+## Optimization History
+
+### Initial Training (11 Gestures)
+- **Accuracy:** 76.89% test, 85-90% train
+- **Issues:** Confused gestures (Coin Flipping, Shooting, Index Finger Flicking, Thumb Up)
+- **High "Uncertain" predictions:** 15-18% on problematic gestures
+
+### After Gesture Reduction (6 Gestures)
+- **Accuracy Gain:** +15.2% (76.89% → 92.11%)
+- **Memory Reduction:** -% flash, -% RAM
+- **Inference Speed:** +% faster
+- **Removed Gestures:** Coin Flipping, Shooting, Index Finger Flicking, Thumb Up, Finger Snapping
+
+---
+
+## Technical Details
+
+### Feature Extraction
+- **Method:** Wavelet transform (rbio3.1 mother wavelet)
+- **Decomposition Level:** 1
+- **Scale Factor:** 0.0098
+- **Frequency Cutoff:** 94 Hz
+- **Purpose:** Captures both time and frequency domain characteristics for gesture discrimination
+
+### Regularization Techniques
+- **L2 Regularization:** 0.0008-0.001 on dense layers (prevents overfitting)
+- **Batch Normalization:** Stabilizes training, enables higher learning rates
+- **Dropout:** 0.20-0.35 (progressively higher in early layers)
+- **Gradient Clipping:** clipnorm=1.0 (prevents exploding gradients)
+
+### Data Preprocessing
+- **Normalization:** Standard scaling applied to sensor data
+- **Window Strategy:** Sliding window with 100% overlap during training
+
+---
+
+## 📖 References
+
+- **HGAG Dataset:** [*Hand Gesture Accelerometer and Gyroscope Dataset*, Mendeley Data (2024)](https://data.mendeley.com/datasets/mkhn7kxjvy/1)
+- **Edge Impulse:** [https://edgeimpulse.com](https://edgeimpulse.com)
+- **Wavelet Analysis:** Mallat, S. (1999). *A Wavelet Tour of Signal Processing*
+- **Seeed XIAO nRF52840:** [Product Documentation](https://wiki.seeedstudio.com/XIAO_BLE/)

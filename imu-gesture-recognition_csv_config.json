@@ -1,0 +1,24 @@
+{
+    "version": 1,
+    "fileName": "clapping.subject35_rep01.csv",
+    "created": 1763711134012,
+    "delimiter": ",",
+    "skipFirstLines": 0,
+    "spec": {
+        "type": "timeseries-row",
+        "valueColumns": [
+            "accel_x",
+            "accel_y",
+            "accel_z",
+            "gyro_x",
+            "gyro_y",
+            "gyro_z"
+        ],
+        "timestamp": {
+            "type": "column",
+            "timestampColumn": "timestamp",
+            "format": "elapsed-milliseconds",
+            "frequency": 200
+        }
+    }
+}
