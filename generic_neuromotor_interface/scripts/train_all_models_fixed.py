@@ -28,6 +28,7 @@ from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingWarmRestarts
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from generic_neuromotor_interface.data import DataSplit
 from generic_neuromotor_interface.data_module import WindowedEmgDataModule
 from generic_neuromotor_interface.networks_isolated import (
     FixedDiscreteGesturesLSTM,
@@ -185,8 +186,15 @@ def train_model_m1(
         channel_indices=[4, 5, 6, 7, 8, 12, 14],
     )
 
+    # Create data split
+    data_split = DataSplit.from_csv(
+        csv_filename=os.path.join(data_dir, 'discrete_gestures_corpus.csv'),
+        pool_test_partitions=True
+    )
+
     data_module = WindowedEmgDataModule(
         data_location=data_dir,
+        data_split=data_split,
         window_length=10000,  # 5 seconds at 2kHz
         stride=2000,          # 1 second stride
         batch_size=config['batch_size'],
@@ -281,8 +289,15 @@ def train_model_m2(
         channel_indices=[4, 5, 6, 7, 8, 12, 14],
     )
 
+    # Create data split
+    data_split = DataSplit.from_csv(
+        csv_filename=os.path.join(data_dir, 'discrete_gestures_corpus.csv'),
+        pool_test_partitions=True
+    )
+
     data_module = WindowedEmgDataModule(
         data_location=data_dir,
+        data_split=data_split,
         window_length=10000,
         stride=2000,
         batch_size=config['batch_size'],
@@ -370,8 +385,15 @@ def train_model_m3(
         channel_indices=[4, 5, 6, 7, 8, 12, 14],
     )
 
+    # Create data split
+    data_split = DataSplit.from_csv(
+        csv_filename=os.path.join(data_dir, 'discrete_gestures_corpus.csv'),
+        pool_test_partitions=True
+    )
+
     data_module = WindowedEmgDataModule(
         data_location=data_dir,
+        data_split=data_split,
         window_length=400,  # 200ms at 2kHz
         stride=200,         # 100ms stride
         batch_size=32,
