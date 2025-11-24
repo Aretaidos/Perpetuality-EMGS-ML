@@ -1,0 +1,91 @@
+# M1: CNN+LSTM Model Configuration for Isolated Channels
+# Expected Performance: 90-95% accuracy with 7 channels
+
+defaults:
+  - _self_
+
+# Task identification
+task: discrete_gestures_m1_isolated
+seed: 42
+train: true
+eval: true
+
+# Data paths
+data_location: ~/emg_data
+
+# Data module configuration
+data_module:
+  _target_: generic_neuromotor_interface.data_module.WindowedEmgDataModule
+
+  # Window parameters
+  window_length: 10000    # 5 seconds at 2kHz
+  stride: 2000            # 1 second stride
+  batch_size: 32
+  num_workers: 4
+  data_location: ${data_location}
+
+  # Transform with isolated channels (0-BASED indices!)
+  transform:
+    _target_: generic_neuromotor_interface.transforms_isolated.IsolatedDiscreteGesturesTransform
+    pulse_window: [0.0, 0.04]  # 0-40ms pulse window
+    channel_indices: [4, 5, 6, 7, 8, 12, 14]  # Ch5-Ch9, Ch13, Ch15
+
+# Lightning module configuration (M1: CNN+LSTM)
+lightning_module:
+  _target_: generic_neuromotor_interface.lightning.DiscreteGesturesModule
+
+  # Network architecture
+  network:
+    _target_: generic_neuromotor_interface.networks_isolated.FixedDiscreteGesturesLSTM
+    input_channels: 7         # CRITICAL: 7 isolated channels
+    conv_output_channels: 128 # Reduced from 512
+    kernel_width: 15          # 7.5ms at 2kHz
+    stride: 10                # Downsample to 200Hz
+    lstm_hidden_size: 128
+    lstm_num_layers: 3
+    output_channels: 9
+    dropout: 0.1
+
+  # Optimizer
+  optimizer: torch.optim.AdamW
+  learning_rate: 0.0005
+
+  # Learning rate schedule
+  lr_scheduler_milestones: [25, 50, 75]
+  lr_scheduler_factor: 0.5
+
+  # Warmup
+  warmup_start_factor: 0.0001
+  warmup_end_factor: 1.0
+  warmup_total_epochs: 5
+
+  # Gradient clipping
+  gradient_clip_val: 1.0
+
+# Trainer configuration
+trainer:
+  max_epochs: 100
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  default_root_dir: ./checkpoints
+
+# Callbacks
+callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    monitor: val_accuracy
+    mode: max
+    save_top_k: 3
+    filename: "m1-epoch={epoch:02d}-val_acc={val_accuracy:.3f}"
+    save_last: true
+
+  - _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: epoch
+
+  - _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: val_loss
+    patience: 15
+    mode: min
