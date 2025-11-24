@@ -167,6 +167,8 @@ class DiscreteGesturesArchitecture(nn.Module):
         x = self.post_conv_layer_norm(x)
 
         # Stacked LSTM layers
+        # Ensure contiguous memory layout for cuDNN LSTM
+        x = x.contiguous()
         x, _ = self.lstm(x)
 
         # Layer normalization
@@ -1553,3 +1555,163 @@ class HandwritingArchitecture(nn.Module):
             torch.div(emg_lengths - slc.start - 1, slc.step, rounding_mode="trunc") + 1
         )
         return emg_lengths
+
+
+class InceptionBlock1D(nn.Module):
+    """
+    Multi-scale 1D Inception block for capturing temporal patterns
+    at different time scales (short EMG bursts to sustained activations).
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels
+    out_channels_per_path : int
+        Number of output channels per parallel path (default: 64)
+    """
+
+    def __init__(self, in_channels: int, out_channels_per_path: int = 64) -> None:
+        super().__init__()
+
+        # Three parallel convolutional paths with different kernel sizes
+        # Path 1: Short-term (5 ms at 1kHz = kernel 5)
+        self.conv_short = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels_per_path, kernel_size=5, padding=2),
+            nn.BatchNorm1d(out_channels_per_path),
+            nn.ReLU(inplace=True),
+        )
+
+        # Path 2: Medium-term (15 ms = kernel 15)
+        self.conv_medium = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels_per_path, kernel_size=15, padding=7),
+            nn.BatchNorm1d(out_channels_per_path),
+            nn.ReLU(inplace=True),
+        )
+
+        # Path 3: Long-term (25 ms = kernel 25)
+        self.conv_long = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels_per_path, kernel_size=25, padding=12),
+            nn.BatchNorm1d(out_channels_per_path),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the Inception block.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape (batch_size, in_channels, sequence_length)
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape (batch_size, out_channels_per_path * 3, sequence_length)
+        """
+        # Compute all paths in parallel
+        short = self.conv_short(x)
+        medium = self.conv_medium(x)
+        long = self.conv_long(x)
+
+        # Concatenate along channel dimension
+        out = torch.cat([short, medium, long], dim=1)
+        return out
+
+
+class DiscreteGesturesCNNArchitecture(nn.Module):
+    """
+    Pure CNN architecture with Inception blocks for discrete gesture recognition.
+    Optimized for embedded deployment with ~5M FLOPs/inference.
+
+    This architecture replaces the computationally expensive LSTM layers with
+    a deeper convolutional architecture featuring multi-scale temporal receptive
+    fields via parallel Inception-style blocks.
+
+    Parameters
+    ----------
+    input_channels : int
+        Number of input EMG channels (default: 7 for isolated channels)
+    output_channels : int
+        Number of gesture classes to predict (default: 9)
+    """
+
+    def __init__(
+        self,
+        input_channels: int = 7,
+        output_channels: int = 9,
+    ) -> None:
+        super().__init__()
+
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+
+        # Initial convolutional block
+        # (B, 7, 200) -> (B, 64, 100) at 200Hz
+        self.conv_block1 = nn.Sequential(
+            nn.Conv1d(input_channels, 64, kernel_size=11, stride=1, padding=5),
+            nn.BatchNorm1d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+        )
+
+        # Inception block for multi-scale feature extraction
+        # (B, 64, 100) -> (B, 192, 100)
+        self.inception = InceptionBlock1D(in_channels=64, out_channels_per_path=64)
+
+        # Second convolutional block
+        # (B, 192, 100) -> (B, 128, 50)
+        self.conv_block2 = nn.Sequential(
+            nn.Conv1d(192, 128, kernel_size=7, stride=1, padding=3),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+        )
+
+        # Optional: Additional conv for deeper feature abstraction
+        # (B, 128, 50) -> (B, 128, 50)
+        self.conv_block3 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=5, stride=1, padding=2),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+        )
+
+        # Classification head - applied per time step
+        # (B, 128, T') -> (B, output_channels, T')
+        self.dropout = nn.Dropout(p=0.3)
+        self.fc_out = nn.Conv1d(128, output_channels, kernel_size=1)
+
+        # For compatibility with DiscreteGesturesModule
+        # These are needed for temporal alignment
+        self.left_context = 0  # No left context needed for this architecture
+        # After two MaxPool operations with stride=2, we downsample by factor of 4
+        self.stride = 4  # Output temporal resolution is 1/4 of input
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the network.
+
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            Input tensor of shape (batch_size, input_channels, sequence_length)
+            Expected input is EMG data at 200Hz, typically 200 time steps
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape (batch_size, output_channels, sequence_length)
+            where sequence_length is downsampled by factor of 4 due to pooling operations
+        """
+        # Convolutional feature extraction
+        x = self.conv_block1(inputs)  # (B, 64, seq_len/2)
+        x = self.inception(x)  # (B, 192, seq_len/2)
+        x = self.conv_block2(x)  # (B, 128, seq_len/4)
+        x = self.conv_block3(x)  # (B, 128, seq_len/4)
+
+        # Apply dropout
+        x = self.dropout(x)
+
+        # Per-time-step classification: (B, 128, T') -> (B, output_channels, T')
+        logits = self.fc_out(x)  # (B, output_channels, seq_len/4)
+
+        return logits
