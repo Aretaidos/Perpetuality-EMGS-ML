@@ -45,6 +45,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from generic_neuromotor_interface.data_module import WindowedEmgDataModule
+from generic_neuromotor_interface.data import DataSplit
 from generic_neuromotor_interface.networks_isolated import (
     FixedDiscreteGesturesLSTM,
     FixedDiscreteGesturesCNN,
@@ -492,8 +493,16 @@ def main():
         channel_indices=[4, 5, 6, 7, 8, 12, 14],
     )
 
+    # Create data split
+    import os
+    data_split = DataSplit.from_csv(
+        csv_filename=os.path.join(args.data_dir, 'discrete_gestures_corpus.csv'),
+        pool_test_partitions=True
+    )
+
     data_module = WindowedEmgDataModule(
         data_location=args.data_dir,
+        data_split=data_split,
         window_length=10000,
         stride=2000,
         batch_size=32,

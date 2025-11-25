@@ -1,0 +1,4 @@
+Model,Accuracy,Macro Precision,Macro Recall,Macro F1,Macro AUC,Parameters
+M1_CNN_LSTM,0.9973,0.5890,0.3662,0.4516,0.9629,411529
+M2_CNN_Only,0.9972,0.6630,0.2221,0.3327,0.9307,550601
+M3_Random_Forest,0.8224,0.0000,0.0000,0.0000,0.0000,N/A
