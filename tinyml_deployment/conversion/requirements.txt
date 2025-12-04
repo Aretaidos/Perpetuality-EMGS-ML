@@ -1,0 +1,23 @@
+# Requirements for M1 model conversion to TFLite
+# Install with: pip install -r requirements.txt
+
+# PyTorch (for loading model)
+torch>=2.0.0
+
+# ONNX conversion
+onnx>=1.15.0
+
+# ONNX to TensorFlow
+onnx2tf>=1.25.0
+
+# TensorFlow (for TFLite conversion)
+tensorflow>=2.14.0
+
+# Numerical computing
+numpy>=1.24.0
+
+# Optional: For AI Edge Torch direct conversion
+# ai-edge-torch>=0.7.0
+
+# Protobuf (onnx compatibility)
+protobuf>=3.20.0,<4.0.0

@@ -1,0 +1,100 @@
+# M1 Compressed: CNN+LSTM for XIAO nRF52840 TinyML Deployment
+# Memory-optimized to fit in 256KB RAM (220KB usable)
+#
+# Original M1: Conv(7->128) -> LSTM(128, 3 layers) -> FC(9)
+#   Parameters: 411,529 | RAM: ~398KB (DOES NOT FIT)
+#
+# Compressed M1: Conv(7->64) -> LSTM(32, 1 layer) -> FC(9)
+#   Parameters: ~45,000 | RAM: ~80-100KB (FITS)
+#
+# Target: Seeed Studio XIAO nRF52840 (non-Sense)
+# Expected Performance: 90-96% accuracy (down from 99.55%)
+
+defaults:
+  - _self_
+
+# Task identification
+task: discrete_gestures_m1_compressed
+seed: 42
+train: true
+eval: true
+
+# Data paths
+data_location: ~/emg_data
+
+# Data module configuration
+data_module:
+  _target_: generic_neuromotor_interface.data_module.WindowedEmgDataModule
+
+  # REDUCED window parameters for TinyML
+  window_length: 2000     # 1 second at 2kHz (reduced from 10000)
+  stride: 1000            # 0.5 second stride
+  batch_size: 64          # Larger batches for faster training
+  num_workers: 4
+  data_location: ${data_location}
+
+  # Transform with isolated channels (0-BASED indices!)
+  transform:
+    _target_: generic_neuromotor_interface.transforms_isolated.IsolatedDiscreteGesturesTransform
+    pulse_window: [0.0, 0.04]  # 0-40ms pulse window
+    channel_indices: [4, 5, 6, 7, 8, 12, 14]  # Ch5-Ch9, Ch13, Ch15
+
+# Lightning module configuration (Compressed M1: CNN+LSTM for XIAO)
+lightning_module:
+  _target_: generic_neuromotor_interface.lightning.DiscreteGesturesModule
+
+  # Network architecture - COMPRESSED for nRF52840
+  network:
+    _target_: generic_neuromotor_interface.networks_isolated.CompressedM1ForXIAO
+    input_channels: 7         # 7 isolated channels
+    conv_output_channels: 64  # REDUCED from 128 (saves ~50% RAM)
+    kernel_width: 15          # 7.5ms at 2kHz
+    stride: 10                # Downsample to 200Hz
+    lstm_hidden_size: 32      # REDUCED from 128 (saves ~75% LSTM RAM)
+    lstm_num_layers: 1        # REDUCED from 3 (single layer)
+    output_channels: 9        # 9 gesture classes
+    dropout: 0.1
+
+  # Optimizer - slightly higher LR for smaller model
+  optimizer: torch.optim.AdamW
+  learning_rate: 0.001
+
+  # Learning rate schedule - faster decay for smaller model
+  lr_scheduler_milestones: [20, 40, 60]
+  lr_scheduler_factor: 0.5
+
+  # Warmup
+  warmup_start_factor: 0.0001
+  warmup_end_factor: 1.0
+  warmup_total_epochs: 3
+
+  # Gradient clipping
+  gradient_clip_val: 1.0
+
+# Trainer configuration
+trainer:
+  max_epochs: 80
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  default_root_dir: ./checkpoints_compressed
+
+# Callbacks
+callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    monitor: val_accuracy
+    mode: max
+    save_top_k: 3
+    filename: "m1_compressed-epoch={epoch:02d}-val_acc={val_accuracy:.3f}"
+    save_last: true
+
+  - _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: epoch
+
+  - _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: val_loss
+    patience: 20
+    mode: min

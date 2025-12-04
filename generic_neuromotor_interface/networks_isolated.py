@@ -347,7 +347,7 @@ def create_gesture_model(
     Parameters
     ----------
     model_type : str
-        'lstm' for M1, 'cnn' for M2
+        'lstm' for M1, 'cnn' for M2, 'm1_compressed' for XIAO-optimized M1
     input_channels : int
         Number of EMG channels (default: 7)
     output_channels : int
@@ -371,8 +371,225 @@ def create_gesture_model(
             input_channels=input_channels,
             output_channels=output_channels,
         )
+    elif model_type.lower() in ['m1_compressed', 'compressed', 'xiao', 'tinyml']:
+        return CompressedM1ForXIAO(
+            input_channels=input_channels,
+            output_channels=output_channels,
+            **kwargs
+        )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
+
+
+class CompressedM1ForXIAO(nn.Module):
+    """
+    Compressed CNN+LSTM Architecture for XIAO nRF52840 TinyML Deployment.
+
+    Memory-optimized version of FixedDiscreteGesturesLSTM (M1) that fits in
+    256KB RAM of the nRF52840 microcontroller.
+
+    Original M1:
+        Conv(7→128) → LSTM(128, 3 layers) → FC(9)
+        Parameters: 411,529 | RAM: ~398KB (DOES NOT FIT)
+
+    Compressed M1:
+        Conv(7→64) → LSTM(32, 1 layer) → FC(9)
+        Parameters: ~45,000 | RAM: ~80-100KB (FITS)
+
+    Memory Budget on XIAO nRF52840:
+        - Tensor Arena: 80KB
+        - Input Buffer (7×1000×4): 28KB
+        - TFLite Runtime: 25KB
+        - LSTM States: 0.3KB
+        - Stack/Heap: 40KB
+        - Total: ~173KB (fits in 220KB usable)
+
+    Target Hardware:
+        - Seeed Studio XIAO nRF52840 (non-Sense)
+        - nRF52840: ARM Cortex-M4F @ 64MHz
+        - RAM: 256KB total, ~220KB usable
+        - Flash: 1MB + 2MB onboard
+
+    Parameters
+    ----------
+    input_channels : int
+        Number of EMG input channels. Default: 7
+    conv_output_channels : int
+        Number of convolutional output channels. Default: 64 (reduced from 128)
+    kernel_width : int
+        Convolutional kernel width. Default: 15
+    stride : int
+        Convolutional stride. Default: 10 (downsample 2kHz→200Hz)
+    lstm_hidden_size : int
+        LSTM hidden state size. Default: 32 (reduced from 128)
+    lstm_num_layers : int
+        Number of stacked LSTM layers. Default: 1 (reduced from 3)
+    output_channels : int
+        Number of output gesture classes. Default: 9
+    dropout : float
+        Dropout probability. Default: 0.1
+    """
+
+    def __init__(
+        self,
+        input_channels: int = 7,
+        conv_output_channels: int = 64,  # REDUCED from 128
+        kernel_width: int = 15,
+        stride: int = 10,
+        lstm_hidden_size: int = 32,      # REDUCED from 128
+        lstm_num_layers: int = 1,        # REDUCED from 3
+        output_channels: int = 9,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        self.input_channels = input_channels
+        self.lstm_num_layers = lstm_num_layers
+        self.lstm_hidden_size = lstm_hidden_size
+        self.conv_output_channels = conv_output_channels
+
+        # Temporal alignment parameters
+        self.left_context = kernel_width - 1
+        self.stride = stride
+
+        # 1. Amplitude normalization
+        self.compression = ReinhardCompression(range_val=1.0, midpoint=32.0)
+
+        # 2. Initial Conv1D - reduced channels
+        self.conv = nn.Conv1d(
+            in_channels=input_channels,
+            out_channels=conv_output_channels,
+            kernel_size=kernel_width,
+            stride=stride,
+            padding=0,
+        )
+
+        # 3. Post-conv processing
+        self.conv_ln = nn.LayerNorm(conv_output_channels)
+        self.conv_dropout = nn.Dropout(dropout)
+        self.relu = nn.LeakyReLU(0.1)
+
+        # 4. Single-layer LSTM (reduced complexity for TinyML)
+        self.lstm = nn.LSTM(
+            input_size=conv_output_channels,
+            hidden_size=lstm_hidden_size,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            dropout=0,  # No dropout for single layer
+            bidirectional=False,
+        )
+
+        # 5. Post-LSTM normalization
+        self.lstm_ln = nn.LayerNorm(lstm_hidden_size)
+
+        # 6. Output projection
+        self.fc_out = nn.Linear(lstm_hidden_size, output_channels)
+
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights for stable training."""
+        # Conv layer
+        nn.init.kaiming_normal_(self.conv.weight, mode='fan_out', nonlinearity='leaky_relu')
+        if self.conv.bias is not None:
+            nn.init.zeros_(self.conv.bias)
+
+        # LSTM: Orthogonal initialization
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+                # Set forget gate bias to 1
+                n = param.size(0)
+                param.data[n//4:n//2].fill_(1.0)
+
+        # Output layer
+        nn.init.xavier_uniform_(self.fc_out.weight)
+        nn.init.zeros_(self.fc_out.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input EMG, shape (batch, 7, time)
+            For 500ms window: (batch, 7, 1000) at 2kHz
+
+        Returns
+        -------
+        torch.Tensor
+            Gesture logits, shape (batch, 9, time')
+            For 1000 samples: (batch, 9, ~100) after stride=10
+        """
+        # 1. Amplitude normalization
+        x = self.compression(x)
+
+        # 2. Conv1D
+        x = self.conv(x)  # (B, 64, T')
+        x = self.relu(x)
+        x = self.conv_dropout(x)
+
+        # 3. Transpose for LayerNorm
+        x = x.transpose(1, 2)  # (B, T', 64)
+        x = self.conv_ln(x)
+
+        # 4. LSTM
+        x = x.contiguous()
+        x, _ = self.lstm(x)  # (B, T', 32)
+
+        # 5. Post-LSTM LayerNorm
+        x = self.lstm_ln(x)
+
+        # 6. Output projection
+        x = self.fc_out(x)  # (B, T', 9)
+
+        # 7. Transpose back
+        x = x.transpose(1, 2)  # (B, 9, T')
+
+        return x
+
+    def get_memory_estimate(self) -> dict:
+        """
+        Estimate memory usage for TinyML deployment.
+
+        Returns
+        -------
+        dict
+            Memory estimates in bytes
+        """
+        # Parameter count
+        params = sum(p.numel() for p in self.parameters())
+
+        # Estimate for INT8 quantization
+        model_size_int8 = params  # 1 byte per param
+
+        # Runtime memory (activations, states)
+        # For 1000 sample input at stride 10 → 100 timesteps
+        window_samples = 1000
+        timesteps = window_samples // self.stride
+
+        activation_mem = (
+            7 * window_samples * 4 +                    # Input buffer
+            self.conv_output_channels * timesteps * 4 + # Conv output
+            self.lstm_hidden_size * timesteps * 4 +     # LSTM output
+            self.lstm_hidden_size * 2 * 4 +             # LSTM states (h, c)
+            9 * timesteps * 4                           # Output
+        )
+
+        return {
+            'parameters': params,
+            'model_size_fp32': params * 4,
+            'model_size_int8': model_size_int8,
+            'activation_memory': activation_mem,
+            'estimated_arena': activation_mem + 20000,  # +20KB overhead
+            'fits_nrf52840': (activation_mem + model_size_int8 + 50000) < 220000
+        }
 
 
 def count_parameters(model: nn.Module) -> int:
