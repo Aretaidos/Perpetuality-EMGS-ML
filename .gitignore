@@ -167,3 +167,17 @@ cython_debug/
 logs/
 data/
 lightning_logs/
+
+# Large Model Files (too big for GitHub, use model registry instead)
+*.pkl
+*.pt
+*.pth
+*.onnx
+*.tflite
+models_gpu_multi_*/
+checkpoints/
+checkpoints_compressed/
+
+# TinyML generated files
+tinyml_deployment/converted_models/
+tinyml_deployment/platformio_project/.pio/
