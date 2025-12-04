@@ -11,6 +11,7 @@
 # Expected Performance: 90-96% accuracy (down from 99.55%)
 
 defaults:
+  - data_module/data_split: discrete_gestures_split
   - _self_
 
 # Task identification
@@ -30,7 +31,7 @@ data_module:
   window_length: 2000     # 1 second at 2kHz (reduced from 10000)
   stride: 1000            # 0.5 second stride
   batch_size: 64          # Larger batches for faster training
-  num_workers: 4
+  num_workers: 0          # 0 workers to avoid HDF5 pickling issues
   data_location: ${data_location}
 
   # Transform with isolated channels (0-BASED indices!)
