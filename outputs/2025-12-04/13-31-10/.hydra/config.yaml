@@ -1,0 +1,71 @@
+task: discrete_gestures_m1_compressed
+seed: 42
+train: true
+eval: true
+data_location: ~/emg_data
+data_module:
+  _target_: generic_neuromotor_interface.data_module.WindowedEmgDataModule
+  window_length: 2000
+  stride: 1000
+  batch_size: 64
+  num_workers: 4
+  data_location: ${data_location}
+  transform:
+    _target_: generic_neuromotor_interface.transforms_isolated.IsolatedDiscreteGesturesTransform
+    pulse_window:
+    - 0.0
+    - 0.04
+    channel_indices:
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 12
+    - 14
+lightning_module:
+  _target_: generic_neuromotor_interface.lightning.DiscreteGesturesModule
+  network:
+    _target_: generic_neuromotor_interface.networks_isolated.CompressedM1ForXIAO
+    input_channels: 7
+    conv_output_channels: 64
+    kernel_width: 15
+    stride: 10
+    lstm_hidden_size: 32
+    lstm_num_layers: 1
+    output_channels: 9
+    dropout: 0.1
+  optimizer: torch.optim.AdamW
+  learning_rate: 0.001
+  lr_scheduler_milestones:
+  - 20
+  - 40
+  - 60
+  lr_scheduler_factor: 0.5
+  warmup_start_factor: 0.0001
+  warmup_end_factor: 1.0
+  warmup_total_epochs: 3
+  gradient_clip_val: 1.0
+trainer:
+  max_epochs: 80
+  accelerator: gpu
+  devices: 4
+  precision: 16-mixed
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  default_root_dir: ./checkpoints_compressed
+  strategy: ddp
+callbacks:
+- _target_: pytorch_lightning.callbacks.ModelCheckpoint
+  monitor: val_accuracy
+  mode: max
+  save_top_k: 3
+  filename: m1_compressed-epoch={epoch:02d}-val_acc={val_accuracy:.3f}
+  save_last: true
+- _target_: pytorch_lightning.callbacks.LearningRateMonitor
+  logging_interval: epoch
+- _target_: pytorch_lightning.callbacks.EarlyStopping
+  monitor: val_loss
+  patience: 20
+  mode: min
