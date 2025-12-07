@@ -1,26 +1,24 @@
 /**
  * sEMG Gesture Classifier - Main Application
+ * M1 4-Channel TinyML Model for XIAO nRF52840
  *
  * Target: Seeed Studio XIAO nRF52840 (non-Sense)
  * Board: seeed-xiao-afruitnrf52-nrf52840
  * MCU: nRF52840 (ARM Cortex-M4F @ 64MHz)
  * RAM: 256KB (~220KB usable), Flash: 1MB + 2MB onboard
  *
- * Model Options:
- *   - Compressed M1 CNN+LSTM (DEFAULT): 45K params, ~80KB arena
- *   - M2 CNN-only: 160K params, ~100KB arena
- *   - Original M1: 411K params - DOES NOT FIT (needs 398KB)
+ * Model: M1 4-Channel TinyML (99.59% accuracy)
+ *   Conv(4->72, k=15, s=10) -> BatchNorm -> LSTM(48, 2 layers) -> FC(9)
+ *   Parameters: ~47K | RAM: ~92KB working buffers
  *
- * Input: 7 EMG channels @ 2kHz, 500ms windows (1000 samples)
+ * 4-Channel EMG Configuration:
+ *   A0: Ch7  - Index flexor (24.5% importance)
+ *   A1: Ch8  - Ring flexor (13.2% importance)
+ *   A2: Ch13 - Index/middle extensor (19.8% importance)
+ *   A3: Ch15 - Ring/pinky extensor (8.7% importance)
+ *
+ * Input: 4 EMG channels @ 2kHz, 1.0s windows (2000 samples)
  * Output: 9 gesture classes with confidence scores
- *
- * Memory Budget (Compressed M1):
- *   - Tensor arena: 80KB
- *   - Input buffer: 28KB (7ch × 1000 × 4 bytes)
- *   - TFLite runtime: 25KB
- *   - LSTM states: 0.3KB
- *   - Stack/heap: 40KB
- *   - Total: ~173KB (fits in 220KB)
  *
  * Gesture Classes:
  *   0: index_press      4: thumb_click     8: thumb_up
@@ -30,7 +28,17 @@
  */
 
 #include <Arduino.h>
-#include "gesture_classifier.h"
+
+// Use M1 4-Channel native inference or TFLite based on build flag
+#ifdef USE_M1_4CHANNEL
+    #include "m1_inference.h"
+    #define EMG_CHANNELS 4
+    #define WINDOW_SAMPLES 2000
+    #define NUM_GESTURES 9
+#else
+    #include "gesture_classifier.h"
+#endif
+
 #include "emg_acquisition.h"
 #include "signal_processing.h"
 
@@ -77,7 +85,11 @@ static float emg_buffer[EMG_CHANNELS * WINDOW_SAMPLES];
 static float output_buffer[NUM_GESTURES];
 
 // Core components
+#ifdef USE_M1_4CHANNEL
+static M1Inference classifier;
+#else
 static GestureClassifier classifier;
+#endif
 static EmgAcquisition emg;
 static SignalProcessor signal_proc;
 
@@ -135,16 +147,20 @@ void setup() {
         Serial.println("FAILED");
     }
 
-    // Initialize gesture classifier (TFLite Micro)
-    Serial.print("[INIT] ML model... ");
+    // Initialize classifier
+#ifdef USE_M1_4CHANNEL
+    Serial.print("[INIT] M1 4-Channel native inference... ");
+#else
+    Serial.print("[INIT] TFLite ML model... ");
+#endif
+
     if (classifier.begin()) {
         Serial.println("OK");
         classifier_ready = true;
         classifier.printMemoryInfo();
     } else {
         Serial.println("FAILED");
-        Serial.println("ERROR: Could not initialize TFLite model!");
-        Serial.println("Make sure model header is included in project.");
+        Serial.println("ERROR: Could not initialize classifier!");
     }
 
     Serial.println("\n========================================");
@@ -199,15 +215,20 @@ void setup_hardware() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    // Configure ADC for EMG input (if using analog)
-    // XIAO nRF52840 has 12-bit ADC, 6 analog channels
+    // Configure ADC for EMG input
+    // XIAO nRF52840 has 12-bit ADC, 6 analog channels (A0-A5)
+    // We use A0-A3 for 4-channel EMG
     analogReadResolution(12);
 
-    // Note: For high-quality EMG, use external ADC via SPI/I2C
-    // - ADS1299 (8-channel, 24-bit, research-grade)
-    // - ADS1115 (4-channel, 16-bit, hobby-grade)
-
-    Serial.println("[HW] Peripherals configured");
+#ifdef USE_M1_4CHANNEL
+    Serial.println("[HW] ADC configured for 4-channel EMG:");
+    Serial.println("     A0 <- Ch7 (Index flexor)");
+    Serial.println("     A1 <- Ch8 (Ring flexor)");
+    Serial.println("     A2 <- Ch13 (Index/middle extensor)");
+    Serial.println("     A3 <- Ch15 (Ring/pinky extensor)");
+#else
+    Serial.println("[HW] ADC configured for multi-channel EMG");
+#endif
 }
 
 // ============================================================================
@@ -217,7 +238,7 @@ void setup_hardware() {
 void run_inference() {
     uint32_t start_time = millis();
 
-    // Run ML classifier
+    // Run classifier
     int predicted_class = classifier.classify(emg_buffer, output_buffer);
 
     last_inference_time = millis() - start_time;
@@ -304,6 +325,11 @@ void handle_serial_commands() {
             Serial.printf("Last gesture: %s\n",
                           last_gesture >= 0 ? GESTURE_NAMES[last_gesture] : "none");
             Serial.printf("Classifier ready: %s\n", classifier_ready ? "yes" : "no");
+#ifdef USE_M1_4CHANNEL
+            Serial.println("Model: M1 4-Channel (native)");
+#else
+            Serial.println("Model: TFLite Micro");
+#endif
             break;
 
         case 'r':  // Reset
@@ -329,6 +355,12 @@ void handle_serial_commands() {
                 Serial.printf("Result: %s (class %d)\n",
                               GESTURE_NAMES[result], result);
                 Serial.printf("Latency: %lu ms\n", elapsed);
+                Serial.print("Confidences: [");
+                for (int i = 0; i < NUM_GESTURES; i++) {
+                    Serial.printf("%.2f", output_buffer[i]);
+                    if (i < NUM_GESTURES - 1) Serial.print(", ");
+                }
+                Serial.println("]");
             }
             break;
 
@@ -358,13 +390,25 @@ void handle_serial_commands() {
 void print_startup_info() {
     Serial.println();
     Serial.println("========================================");
+#ifdef USE_M1_4CHANNEL
+    Serial.println("  M1 4-Channel TinyML Gesture Classifier");
+    Serial.println("  (Native Inference Engine v1.0)");
+#else
     Serial.println("  sEMG Gesture Classifier v1.0");
+    Serial.println("  (TFLite Micro)");
+#endif
     Serial.println("========================================");
     Serial.println();
     Serial.println("Target: Seeed Studio XIAO nRF52840");
     Serial.println("MCU:    nRF52840 (Cortex-M4F @ 64MHz)");
-    Serial.println("RAM:    256KB");
+    Serial.println("RAM:    256KB (~220KB usable)");
     Serial.println("Flash:  1MB + 2MB onboard");
+    Serial.println();
+#ifdef USE_M1_4CHANNEL
+    Serial.println("Model:  M1 4-Channel (99.59% accuracy)");
+    Serial.println("Arch:   Conv->BN->LSTM(2)LN->FC");
+    Serial.println("Params: ~47K (INT8 quantized)");
+#endif
     Serial.println();
     Serial.printf("Input:  %d channels x %d samples\n", EMG_CHANNELS, WINDOW_SAMPLES);
     Serial.printf("Output: %d gesture classes\n", NUM_GESTURES);

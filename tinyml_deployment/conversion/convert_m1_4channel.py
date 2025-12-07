@@ -102,10 +102,10 @@ class M1_4Channel_ForExport(nn.Module):
         )
 
         # BatchNorm (key difference from failed compressed M1)
-        self.bn = nn.BatchNorm1d(conv_output_channels)
+        self.conv_bn = nn.BatchNorm1d(conv_output_channels)
 
         # Dropout
-        self.dropout = nn.Dropout(dropout)
+        self.conv_dropout = nn.Dropout(dropout)
 
         # 2-layer LSTM (key difference from failed compressed M1)
         self.lstm = nn.LSTM(
@@ -139,9 +139,9 @@ class M1_4Channel_ForExport(nn.Module):
 
         # Conv1D
         x = self.conv(x)  # (B, 72, T')
-        x = self.bn(x)
+        x = self.conv_bn(x)
         x = torch.relu(x)
-        x = self.dropout(x)
+        x = self.conv_dropout(x)
 
         # Transpose for LSTM: (B, 72, T') -> (B, T', 72)
         x = x.transpose(1, 2)
@@ -264,12 +264,8 @@ def export_to_onnx(
         output_path,
         input_names=['emg_input'],
         output_names=['gesture_logits'],
-        opset_version=13,
+        opset_version=17,
         do_constant_folding=True,
-        dynamic_axes={
-            'emg_input': {0: 'batch'},
-            'gesture_logits': {0: 'batch'}
-        },
         verbose=False,
     )
 
@@ -510,9 +506,12 @@ def convert_m1_4channel(
     try:
         import onnx
         export_to_onnx(model, onnx_path, input_shape)
-    except ImportError:
-        print("ONNX not installed. Skipping ONNX export.")
+    except ImportError as e:
+        print(f"ONNX not installed: {e}")
         print("Install with: pip install onnx")
+        onnx_path = None
+    except Exception as e:
+        print(f"ONNX export failed: {e}")
         onnx_path = None
 
     # Convert to TFLite
