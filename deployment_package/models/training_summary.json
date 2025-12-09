@@ -1,0 +1,20 @@
+{
+  "best_val_accuracy": 0.9958592893173738,
+  "best_epoch": 2,
+  "total_epochs": 50,
+  "total_time_seconds": 4178.404273271561,
+  "parameters": 47313,
+  "config": {
+    "input_channels": 4,
+    "conv_output_channels": 72,
+    "lstm_hidden_size": 48,
+    "lstm_num_layers": 2,
+    "window_length": 2000,
+    "channel_indices": [
+      6,
+      7,
+      12,
+      14
+    ]
+  }
+}
