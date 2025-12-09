@@ -71,7 +71,6 @@ lightning_module:
   # Optimizer - AdamW with weight decay
   optimizer: torch.optim.AdamW
   learning_rate: 0.001
-  weight_decay: 0.01
 
   # Learning rate schedule - milestone decay
   lr_scheduler_milestones: [25, 50, 75]

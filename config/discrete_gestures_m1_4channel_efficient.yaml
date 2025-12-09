@@ -80,7 +80,6 @@ lightning_module:
   # Optimizer - higher LR for CNN-only (no recurrent gradient issues)
   optimizer: torch.optim.AdamW
   learning_rate: 0.002
-  weight_decay: 0.01
 
   # Faster LR schedule for CNN convergence
   lr_scheduler_milestones: [30, 60, 80]

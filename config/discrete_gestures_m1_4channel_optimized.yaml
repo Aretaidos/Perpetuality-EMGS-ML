@@ -88,7 +88,6 @@ lightning_module:
   # Optimizer - slightly lower LR for BiLSTM stability
   optimizer: torch.optim.AdamW
   learning_rate: 0.0008
-  weight_decay: 0.01
 
   # LR schedule - adapted for faster convergence
   lr_scheduler_milestones: [25, 45, 65]
