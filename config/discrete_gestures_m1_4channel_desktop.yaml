@@ -1,0 +1,119 @@
+# M1 4-Channel Desktop: Full-Capacity CNN+LSTM for Desktop Inference (Variant 1)
+#
+# This configuration trains a full-capacity 4-channel model optimized for
+# desktop/laptop inference without hardware constraints.
+#
+# Architecture:
+#   Conv1d(4, 144, k=15, s=10) -> BatchNorm -> ReLU -> Dropout(0.2)
+#   -> LSTM(144, 128, 3 layers) -> LayerNorm -> FC(9)
+#
+# Parameters: ~405K (matches 7-channel M1)
+# Expected Accuracy: 99.3-99.6%
+# Inference Time: 10-12ms CPU, 2-4ms GPU
+#
+# 4-Channel Selection (flexor-extensor balance, 66.2% importance):
+#   - Ch7 (idx 6): Index flexor (24.5%) - press detection
+#   - Ch8 (idx 7): Ring flexor (13.2%) - press detection
+#   - Ch13 (idx 12): Index/middle extensor (19.8%) - release detection
+#   - Ch15 (idx 14): Ring/pinky extensor (8.7%) - release detection
+#
+# Training uses Multi-GPU DDP for faster convergence:
+#   - 2x GPUs (DDP strategy)
+#   - Expected time: 1.8-2.2 hours
+#   - Expected accuracy: 99.3-99.6%
+
+defaults:
+  - data_module/data_split: discrete_gestures_split
+  - _self_
+
+# Task identification
+task: discrete_gestures_m1_4channel_desktop
+seed: 42
+train: true
+eval: true
+
+# Data paths
+data_location: ~/emg_data
+
+# Data module configuration
+data_module:
+  _target_: generic_neuromotor_interface.data_module.WindowedEmgDataModule
+
+  # Window parameters (same as 7-channel for temporal context)
+  window_length: 2000     # 1.0 second at 2kHz
+  stride: 1000            # 0.5 second stride (50% overlap)
+  batch_size: 64          # Per-GPU batch size
+  num_workers: 0          # 0 workers to avoid HDF5 pickling issues
+  data_location: ${data_location}
+
+  # Transform with 4 isolated channels (0-BASED indices!)
+  transform:
+    _target_: generic_neuromotor_interface.transforms_isolated.Isolated4ChannelTransform
+    pulse_window: [0.0, 0.04]  # 0-40ms pulse window
+    channel_indices: [6, 7, 12, 14]  # Ch7, Ch8, Ch13, Ch15 (1-based)
+
+# Lightning module configuration (M1 4-Channel Desktop)
+lightning_module:
+  _target_: generic_neuromotor_interface.lightning.DiscreteGesturesModule
+
+  # Network architecture - full capacity for desktop
+  network:
+    _target_: generic_neuromotor_interface.networks_isolated.M1_4Channel_Desktop
+    input_channels: 4           # 4 isolated channels
+    conv_output_channels: 144   # Wider than 7ch (128) to compensate
+    kernel_width: 15            # 7.5ms at 2kHz
+    stride: 10                  # Downsample to 200Hz
+    lstm_hidden_size: 128       # Match 7-channel capacity
+    lstm_num_layers: 3          # Full 3-layer depth
+    output_channels: 9          # 9 gesture classes
+    dropout: 0.2                # Moderate dropout for regularization
+
+  # Optimizer - AdamW with weight decay
+  optimizer: torch.optim.AdamW
+  learning_rate: 0.001
+  weight_decay: 0.01
+
+  # Learning rate schedule - milestone decay
+  lr_scheduler_milestones: [25, 50, 75]
+  lr_scheduler_factor: 0.5
+
+  # Warmup
+  warmup_start_factor: 0.0001
+  warmup_end_factor: 1.0
+  warmup_total_epochs: 5
+
+  # Gradient clipping
+  gradient_clip_val: 1.0
+
+# Trainer configuration
+trainer:
+  max_epochs: 100
+  accelerator: gpu
+  devices: 2              # Use 2 GPUs with DDP
+  strategy: ddp           # Distributed Data Parallel
+  precision: 16-mixed     # Mixed precision for faster training
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  default_root_dir: ./checkpoints_4channel_desktop
+
+# Callbacks
+callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    monitor: val_accuracy
+    mode: max
+    save_top_k: 3
+    filename: "m1_4ch_desktop-epoch={epoch:02d}-val_acc={val_accuracy:.3f}"
+    save_last: true
+
+  - _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: epoch
+
+  - _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: val_loss
+    patience: 25
+    mode: min
+
+  # Gradient monitoring for debugging
+  - _target_: pytorch_lightning.callbacks.DeviceStatsMonitor
+    cpu_stats: false

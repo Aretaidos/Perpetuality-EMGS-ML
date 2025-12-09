@@ -1,0 +1,135 @@
+# M1 4-Channel Optimized: CNN+BiLSTM with Attention for Desktop (Variant 2)
+#
+# This configuration trains an optimized 4-channel model with architecture
+# specifically designed for 4-channel EMG characteristics: multi-scale feature
+# extraction and channel attention.
+#
+# Architecture:
+#   Multi-scale Conv (4→64, kernels 7/15/25) → BatchNorm → Attention
+#   → Downsample Conv (64→96, s=10) → Residual Conv
+#   → BiLSTM(96, 48, 1 layer) → LayerNorm → FC(9)
+#
+# Parameters: ~135-155K (3× TinyML, 0.37× 7ch full)
+# Expected Accuracy: 99.55-99.65%
+# Inference Time: 15-25ms CPU (BiLSTM slower but more accurate)
+#
+# Key Innovation:
+#   - Multi-scale conv captures different EMG activation speeds
+#   - Channel attention dynamically weights channel importance
+#   - Bidirectional LSTM for desktop (can look ahead)
+#
+# Training uses Multi-GPU DDP:
+#   - 2x GPUs (DDP strategy)
+#   - Expected time: 1.5-2.0 hours
+#   - Expected accuracy: 99.55-99.65%
+
+defaults:
+  - data_module/data_split: discrete_gestures_split
+  - _self_
+
+# Task identification
+task: discrete_gestures_m1_4channel_optimized
+seed: 42
+train: true
+eval: true
+
+# Data paths
+data_location: ~/emg_data
+
+# Data module configuration
+data_module:
+  _target_: generic_neuromotor_interface.data_module.WindowedEmgDataModule
+
+  # Window parameters
+  window_length: 2000     # 1.0 second at 2kHz
+  stride: 1000            # 0.5 second stride (50% overlap)
+  batch_size: 64          # Per-GPU batch size
+  num_workers: 0          # 0 workers for HDF5 compatibility
+  data_location: ${data_location}
+
+  # Transform with 4 isolated channels
+  transform:
+    _target_: generic_neuromotor_interface.transforms_isolated.Isolated4ChannelTransform
+    pulse_window: [0.0, 0.04]
+    channel_indices: [6, 7, 12, 14]  # Ch7, Ch8, Ch13, Ch15
+
+# Lightning module configuration
+lightning_module:
+  _target_: generic_neuromotor_interface.lightning.DiscreteGesturesModule
+
+  # Network architecture - optimized for 4-channel input
+  network:
+    _target_: generic_neuromotor_interface.networks_isolated.M1_4Channel_Optimized
+    input_channels: 4
+
+    # Multi-scale conv stage
+    multiscale_channels: [20, 22, 22]  # Total: 64 channels
+    multiscale_kernels: [7, 15, 25]     # Captures different time scales
+
+    # Channel attention
+    attention_reduction: 4   # 64 → 16 → 64
+
+    # Downsampling conv
+    conv_output_channels: 96
+    kernel_width: 15
+    stride: 10
+
+    # Residual conv
+    residual_kernel: 5      # 0 to disable
+
+    # BiLSTM
+    lstm_hidden_size: 48    # 48 each direction = 96 output
+    lstm_num_layers: 1      # Single BiLSTM layer
+
+    # Output
+    output_channels: 9
+    dropout: 0.3
+
+  # Optimizer - slightly lower LR for BiLSTM stability
+  optimizer: torch.optim.AdamW
+  learning_rate: 0.0008
+  weight_decay: 0.01
+
+  # LR schedule - adapted for faster convergence
+  lr_scheduler_milestones: [25, 45, 65]
+  lr_scheduler_factor: 0.5
+
+  # Warmup
+  warmup_start_factor: 0.0001
+  warmup_end_factor: 1.0
+  warmup_total_epochs: 5
+
+  # Gradient clipping
+  gradient_clip_val: 1.0
+
+# Trainer configuration
+trainer:
+  max_epochs: 80          # Slightly fewer epochs (faster convergence expected)
+  accelerator: gpu
+  devices: 2              # Use 2 GPUs with DDP
+  strategy: ddp
+  precision: 16-mixed
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  enable_checkpointing: true
+  default_root_dir: ./checkpoints_4channel_optimized
+
+# Callbacks
+callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    monitor: val_accuracy
+    mode: max
+    save_top_k: 3
+    filename: "m1_4ch_opt-epoch={epoch:02d}-val_acc={val_accuracy:.4f}"
+    save_last: true
+
+  - _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: epoch
+
+  - _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: val_loss
+    patience: 20
+    mode: min
+
+  - _target_: pytorch_lightning.callbacks.DeviceStatsMonitor
+    cpu_stats: false
