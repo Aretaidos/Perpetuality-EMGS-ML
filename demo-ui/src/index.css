@@ -1,0 +1,231 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Background Colors */
+  --bg-primary: #FAFBFC;
+  --bg-secondary: #F0F4F8;
+  --bg-tertiary: #E2E8F0;
+  --bg-glass: rgba(255, 255, 255, 0.7);
+
+  /* Accent Colors */
+  --accent-primary: #6366F1;
+  --accent-secondary: #8B5CF6;
+  --accent-tertiary: #06B6D4;
+
+  /* Finger States */
+  --finger-idle: #E2E8F0;
+  --finger-active: #6366F1;
+  --finger-glow: rgba(99, 102, 241, 0.4);
+  --thumb-active: #8B5CF6;
+  --thumb-glow: rgba(139, 92, 246, 0.4);
+
+  /* Motion Colors */
+  --motion-up: #10B981;
+  --motion-down: #F59E0B;
+  --motion-in: #06B6D4;
+  --motion-out: #EC4899;
+
+  /* Text Colors */
+  --text-primary: #1E293B;
+  --text-secondary: #64748B;
+  --text-muted: #94A3B8;
+
+  /* Status Colors */
+  --status-connected: #10B981;
+  --status-disconnected: #EF4444;
+  --status-processing: #F59E0B;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+body {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #FAFBFC 0%, #F0F4F8 50%, #E8EDF5 100%);
+  overflow-x: hidden;
+}
+
+/* Glass Panel Effect */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+}
+
+/* Gradient Text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Finger Glow Animation */
+@keyframes fingerGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px var(--finger-glow));
+  }
+  50% {
+    filter: drop-shadow(0 0 20px var(--finger-glow));
+  }
+}
+
+.finger-glowing {
+  animation: fingerGlow 1.5s ease-in-out infinite;
+}
+
+/* Thumb Pulse Animation */
+@keyframes thumbPulse {
+  0% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  25% {
+    transform: scale(1.15);
+    filter: drop-shadow(0 0 30px var(--thumb-glow));
+  }
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+}
+
+.thumb-pulse {
+  animation: thumbPulse 0.4s ease-out;
+}
+
+/* Direction Motion Animations */
+@keyframes motionUp {
+  0%, 100% { transform: translateY(0); opacity: 0.4; }
+  50% { transform: translateY(-8px); opacity: 1; }
+}
+
+@keyframes motionDown {
+  0%, 100% { transform: translateY(0); opacity: 0.4; }
+  50% { transform: translateY(8px); opacity: 1; }
+}
+
+@keyframes motionIn {
+  0%, 100% { transform: translateX(0); opacity: 0.4; }
+  50% { transform: translateX(-8px); opacity: 1; }
+}
+
+@keyframes motionOut {
+  0%, 100% { transform: translateX(0); opacity: 0.4; }
+  50% { transform: translateX(8px); opacity: 1; }
+}
+
+/* Particle Background */
+.particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  opacity: 0.3;
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0) translateX(0);
+  }
+  33% {
+    transform: translateY(-20px) translateX(10px);
+  }
+  66% {
+    transform: translateY(-10px) translateX(-10px);
+  }
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Smooth Transitions */
+.transition-smooth {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* EMG Waveform Chart */
+.emg-waveform {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Status Indicator Pulse */
+@keyframes statusPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    box-shadow: 0 0 0 4px currentColor;
+  }
+}
+
+.status-pulse {
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+/* Metric Card Hover */
+.metric-card {
+  transition: all 0.3s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+}
+
+/* Grid Background Pattern */
+.grid-pattern {
+  background-image:
+    linear-gradient(to right, rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Gesture Log Item Animation */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.log-item-enter {
+  animation: slideIn 0.3s ease-out;
+}
